@@ -533,8 +533,6 @@ There are several drawbacks to this proposal:
 
 ## Within the basic epoch structure
 
-**[unchanged]**
-
 Sticking with the basic idea of epochs, there are a couple alternative setups,
 that avoid "preview" epochs.
 
@@ -605,6 +603,3 @@ version, however this breaks backwards compatibility in the strict sense.
 
 - Will we ever consider dropping support for very old major version series? Given the
   constraints in this RFC, it seems unlikely to ever be worth it.
-
-# Notes
-
