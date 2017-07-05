@@ -6,18 +6,42 @@
 # Summary
 [summary]: #summary
 
-There has been a long-standing question around Rust's evolution: will there ever be a Rust 2.0 in the semver sense?
+There has been a long-standing question around Rust's evolution: what exactly does
+[stability without stagnation] mean in the medium-to-long term, and how will breaking
+changes be introduced, if ever?
 
-This RFC gives the answer: certainly not in the foreseeable future, and probably not ever.
+This RFC attempts to answer that question.
 
-Instead, this RFC proposes *epochs*, a mechanism for language evolution without breakage, which fits neatly into Rust's existing train and release channel process. It's an attempt to provide the next stage of our core principle of [stability without stagnation], inspired in part by similar mechanisms in languages like C++ and Java.
-
-With epochs, it becomes possible to do things like introduce new keywords without breaking existing code or splitting the ecosystem. Each crate specifies the epoch it fits within (a bit like "C++11" or "C++14"), and the compiler can cope with multiple epochs being used throughout a dependency graph. Thus we still guarantee that your code will keep compiling on the latest stable release (modulo the [usual caveats]), while making it possible to evolve the language in some new ways via explicit opt-in.
+This is a partial-rewrite of [the epochs RFC]. Differences are **[marked]**.
 
 [stability without stagnation]: https://blog.rust-lang.org/2014/10/30/Stability.html
+[the epochs RFC]: https://github.com/aturon/rfcs/blob/epochs/text/0000-epochs.md
+
+## Subject
+
+This RFC concerns versioning and stability of the **Rust language**, encompassing the
+language itself, the core libraries, and documentation of these.
+
+The RFC also touches on versioning of the **Rust toolset**, comprising rustc, Cargo, and
+related tools [?].
+
 
 # Motivation
 [motivation]: #motivation
+
+**[New text]**
+It is important to bear in mind that there are multiple reasons to care about stability:
+
+*   Annie found some neglected Rust code apparently solving her problem, and just wants to run
+    it with as little fuss as possible.
+*   Bert is building a flashy new GitHub CLI tool, but isn't a fan of frequently changing
+    specifications, and wants to specify a Rust version then not be bothered by warnings about
+    features deprecated by the next major version.
+*   Chris, on the other hand, wants the latest-and-greatest, and wants the project prepared in
+    advance so that the version number can be updated the moment the next Rust is stable.
+*   Dave is building an app for Windows 23. Unfortunately the Rust tool-chain shipping with Win 23
+    is already 4 years out-of-date, so he needs to target an old version; to complicate matters,
+    he also wants his app to compile on the latest Ubuntu release with no fuss.
 
 ## The status quo
 
@@ -67,60 +91,97 @@ There are two desires that the current process doesn't have a good story for:
 At the same time, the commitment to stability and rapid releases has been an
 incredible boon for Rust, and we don't want to give up those existing mechanisms.
 
-This RFC proposes *epochs* as a mechanism we can layer on top of our existing
-release process, keeping its guarantees while addressing its gaps.
+**[Changed]**
+This RFC proposes requirements on what may change between major Rust versions,
+how stability with old versions is maintained, and how old code is updated for new releases.
 
 # Detailed design
 [design]: #detailed-design
 
 ## The basic idea
 
-- An *epoch* represents a multi-year accumulation of features, improvements, and
-  idiom shifts for Rust. It covers the language, core libraries, core tooling,
-  and core documentation.
+**[Significant changes]**
 
-- Epochs are named by the year in which they are introduced, which we expect to
-  happen every two or three years.
+- A major version series for the Rust language represents a multi-year accumulation
+  of features, improvements, and idiom shifts for Rust.
 
-- Each **crate** declares an epoch in its `Cargo.toml` (or, if not, is assumed
-  to have epoch 2015, coinciding with Rust 1.0): `epoch = "2018"`. Thus, new
-  epochs are *opt in*, and the dependencies of a crate may use older or newer
-  epochs than the crate itself.
+- Minor version numbers continue to introduce new features, but may not introduce
+  breaking changes.
 
-To be crystal clear: Rust compilers are expected to support multiple epochs, and
-a crate dependency graph may involve several different epochs
-simultaneously. Thus, **epochs do not split the ecosystem nor do they break
-existing code**.
+- Each **crate** declares the required major and optionally minor language version
+  in its `Cargo.toml`, e.g. `rust_version = "2.0"`. The major version must be matched
+  exactly, while the minor version is considered to be minimum requirement of the
+  crate. If the version is not specified, `1.0` is assumed (thus ensuring backwards
+  compatibility and making new major versions opt-in.)
 
-Furthermore:
+- Rust toolsets *should* support all historical major language versions, specified
+  via a command-line option, and again defaulting to `1` (Rust 1.0).
 
-- Prior to a new epoch, the current epoch will gain deprecations over time.
-- When cutting a new epoch, existing deprecations may turn into hard errors, and
-  the epoch may take advantage of that fact to repurpose existing usage,
-  e.g. introducing a new keyword. This is the only kind of change a new epoch
-  can make.
+New major versions are only allowed to introduce breaking changes via *deprecations*.
+These work slightly differently to the way they do now:
 
-Code that compiles without warnings on the previous epoch (under the latest
-compiler release) will compile without errors on the next epoch (modulo the
-[usual caveats] about type inference changes and so on). Alternatively, you can
-continue working with the previous epoch on new compiler releases indefinitely,
-but your code may not have access to new features that require new keywords and
-the like.
+- Deprecation lints continue to be introduced by new minor versions, but are not enabled
+  by default. (This is important, since e.g. Bert wants to develop to a fixed language
+  specification and Dave may be forced to use features already deprecated by the latest
+  language version.)
+- Deprecation lints are enabled on an opt-in basis via a command-line option
+- New major language versions may turn deprecations into hard errors. This is the only kind
+  of change a new major version can make beyond what a minor version can do.
+
+Additionally,
+
+- Features introduced after a major version increment are not automatically made available
+  to the previous major version; however, new minor releases for the old major version
+  may continue to be released (like Python 2.6 and 2.7 were released after 3.0).
+- Exceptionally, if a security issue is found which cannot be fixed without API change,
+  the corresponding deprecation lint will be enabled by default as a security warning,
+  and not disabled by any catch-all disable-deprecations option.
+
+Code that compiles without warnings on version x.y should continue to compile without
+warnings on all versions x.z for z > y, modulo the [usual caveats] about type inference
+changes and so on. Updating to the next major version will turn deprecations into hard
+errors; alternatively the deprecations may be enabled as warnings while still using
+a previous major version. Furthermore, new toolsets *should* support old major versions
+indefinitely, although obviously this cannot be enforced for all compilers.
 
 [usual caveats]: https://github.com/rust-lang/rfcs/blob/master/text/1122-language-semver.md
 
-## Epoch timing, stabilizations, and the roadmap process
+## Toolsets and versions
+
+**[new section]**
+
+Today, new Rust language features are developed in concert with new toolchain versions.
+(Roughly speaking,) an RFC is written, an implementation is written in Rustc and exposed under a
+feature flag in nightly releases, the proposed change is reviewed, and, if accepted, the feature
+becomes available in the next stable toolchain.
+
+This works well today, but it may not always be desirable to fix language and toolchain
+versions, and the existing versioning becomes confusing in the context of other compilers
+and new major language versions.
+
+It is proposed that the existing Rust version numbers are inherited by the language;
+the toolchain may continue incrementing versions in lock-step, but it must be clear that
+a 2.x toolchain will support both 1.z and 2.x language versions, for some z (possibly
+larger than the last 1.* toolchain version).
+
+## Version timing, stabilizations, and the roadmap process
+
+**[minor changes]**
 
 While this RFC will focus largely on the mechanics around deprecation, a key
-point is that epochs also give a *name* to large idiom shifts, recognizing that
+point is that major versions also give a *name* to large idiom shifts, recognizing that
 a significant set of new features have stabilized and should change
 the way you write code and construct APIs.
 
-The proposal is much akin to C++ standards, which are tied to particular years
-(e.g. C++11, C++14). Each of these versions represents major enhancements to the
-language and changes to idioms. Compilers generally take flags to let you select
-*which* standard you wish to compile against. Many other languages (like Java)
-take a similar approach.
+The proposal is much akin to the versioning used by other languages: e.g. Java and
+Python, or C++ standards but with different names (e.g. C++11, C++14).
+In each case, either separate compilers are maintained for each language version,
+or compilers generally take flags to let you select *which* standard you wish to
+compile against. It is required that Rust toolchains take the latter approach
+(support for multiple versions in the same compiler) for compatibility between
+crates using different versions (see below).
+
+**[unchanged; applicable but with terminology challenges]**
 
 To some degree, you can understand these as "marketing" releases; they bundle
 together a set of changes into a (hopefully coherent) package that's easy to
@@ -160,38 +221,36 @@ epoch. On the other hand, when we declare an epoch year in the roadmap, we will
 likely have a pretty decent chance of what's *likely* to ship as stable in the
 first epoch release.
 
-### Epoch previews
+### Preview versions
+
+**[minor changes]**
 
 To provide the clarity discussed above, and to allow us to stabilize
-improvements as they're ready, we'll introduce one more concept: epoch
-*previews*, denoted in the figure as green, italic compiler releases.
+improvements as they're ready, we'll introduce one more concept: *preview versions*,
+denoted in the figure as green, italic compiler releases.
 
-The problem is that for changes that rely on a new epoch, such as introducing a
-new keyword, we cannot stabilize them within the existing epoch as-is; that
+The problem is that for changes that rely on a new major version, such as introducing a
+new keyword, we cannot stabilize them within the existing major series as-is; that
 would be a breaking change. On the other hand, we *want* to stabilize them as
 they become ready, rather than tying all of the stabilizations to a high-stakes
-epoch release. And finally, we want to bundle them all together under a new moniker.
+major version release. And finally, we want to bundle them all together under a new moniker.
 
-We thread the needle by providing an *epoch preview* at some point prior to the
-new epoch being shipped: `epoch = "2015-next"`. This preview includes *all*
-of the hard errors that will be introduced in the next epoch, but not yet all of
-the stabilizations. It is usable from the stable channel.
+We thread the needle by providing a *preview version* at some point prior to the
+new major version being shipped: `rust_version = "1.0-next"`. This preview includes *all*
+of the hard errors that will be introduced in the next major version, but not yet all of
+the stabilizations. It is usable from the stable channel, although not itself truely stable
+since more hard errors may be introduced before the next major version is released.
 
-There are a few reasons to provide such a preview:
+The main reason to provide such a preview:
 
-- Most importantly, it clears the way to shipping features for the next epoch on
+- Most importantly, it clears the way to shipping features for the next major version on
   the stable channel as they become ready, even if they require some existing
   usages to become errors. Again, keyword introduction is a simple example: the
-  `2015-next` epoch can begin by making it a hard error to use `catch` as an
+  `1.0-next` version can begin by making it a hard error to use `catch` as an
   identifier (which is allowed today), and then later stabilizing the new
-  `catch` feature when it is ready. By "locking in" the hard errors up front,
-  however, **the preview of the epoch is guaranteed to be stable**: once code
-  compiles on the preview epoch, it will continue to do so as further features
-  stabilize.
+  `catch` feature when it is ready.
 
-- The preview epoch also gives a clear picture of exactly what deprecations will
-  become errors in the next epoch, providing a nice way to future-proof your
-  code for upgrading to the epoch when available.
+**[again, terminology challenges:]**
 
 Putting this all together, in an "epoch year" the roadmap will lay out an
 expected set of deprecations-to-become-errors and potential features; early in
@@ -205,87 +264,89 @@ just be an alias for it).
 There are some alternative ways to achieve similar ends, but with significant
 downsides; these are explored in the Alternatives section.
 
-## Constraints on epoch changes
+## Constraints on major version changes
 
-We have already constrained epochal changes to essentially removing deprecations
+We have already constrained changes to essentially removing deprecations
 (and thus making way for new features). But we want to further constrain them,
 for two reasons:
 
 - **Limiting technical debt**. The compiler retains compatibility for old
-  epochs, and thus must have distinct "modes" for dealing with them. We need to
+  major versions, and thus must have distinct "modes" for dealing with them. We need to
   strongly limit the amount and complexity of code needed for these modes, or
   the compiler will become very difficult to maintain.
 
 - **Limiting deep conceptual changes**. Just as we want to keep the compiler
   maintainable, so too do we want to keep the conceptual model sustainable. That
-  is, if we make truly radical changes in a new epoch, it will be very difficult
-  for people to reason about code involving different epochs, or to remember the
+  is, if we make truly radical changes in a new major version, it will be very difficult
+  for people to reason about code involving different major versions, or to remember the
   precise differences.
 
-As such, the RFC proposes to limit epochal changes to be "superficial",
+As such, the RFC proposes to limit changes to be "superficial",
 i.e. occurring purely in the early front-end stages of the compiler. More
 concretely:
 
 - We identify "core Rust" as being, roughly, MIR and the core trait system.
   - Over time, we'll want to make this definition more precise, but this is best
     done in an iterative fashion rather than specified completely up front.
-- Epochs can only change the front-end translation into core Rust.
+- Major versions can only change the front-end translation into core Rust.
 
 Hence, **the compiler supports only a single version of core Rust**; all the
-"epoch modes" boil down to keeping around multiple desugarings into this core
-Rust, which greatly limits the complexity and technical debt involved. Similar,
+"version modes" boil down to keeping around multiple desugarings into this core
+Rust, which greatly limits the complexity and technical debt involved. Similarly,
 core Rust encompasses the core *conceptual* model of the language, and this
-constraint guarantees that, even when working with multiple epochs, those core
+constraint guarantees that, even when working with multiple major versions, those core
 concepts remain fixed.
 
-Incidentally, these constraints also mean that epochal changes should be
+Incidentally, these constraints also mean that major version changes should be
 amenable to a `rustfix` tool that automatically, and perfectly, upgrades code to
-a new epoch. It's an open question whether we want to *require* such a tool
-before introducing a new epoch.
+a new major version. It's an open question whether we want to *require* such a tool
+before making the release.
 
-### What epochs can do
+### What major versions can do
 
 Given those basics, let's look in more detail at a few examples of the kinds of
-changes epochs enable. These are just examples---this RFC doesn't entail any
+changes new major versions enable. These are just examples---this RFC doesn't entail any
 commitment to these language changes.
 
 #### Example: new keywords
 
+**[minor changes, plus warning changes]**
+
 We've taken as a running example introducing new keywords, which sometimes
 cannot be done backwards compatibly (because a contextual keyword isn't
 possible). Let's see how this works out for the case of `catch`, assuming that
-we're currently in epoch 2015.
+we're currently on major version 1.
 
 - First, we deprecate uses of `catch` as identifiers, preparing it to become a new keyword.
 - We may, as today, implement the new `catch` feature using a temporary syntax
   for nightly (like `do catch`).
-- When epoch `2015-next` is released, opting into it makes `catch` into a
+- When the preview `1.0-next` is released, opting into it makes `catch` into a
   keyword, regardless of whether the `catch` feature has been implemented. This
   means that opting in may require some adjustment to your code.
 - The `catch` syntax can be hooked into an implementation usable on nightly with
-  the preview epoch.
+  the preview version.
 - When we're confident in the `catch` feature on nightly, we can stabilize it
-  *onto the stable channel for users opting into `2015-next`*. It cannot be stabilized onto the epoch `2015`,
-  since it requires a new keyword.
-- At some point, epoch `2018` is fully shipped, meaning that `2015-next`
-  becomes a deprecated alias for `2018`.
+  *onto the stable channel for users opting into `1.0-next`*. It cannot be stabilized by a
+  1.x minor version, since it requires a new keyword.
+- At some point, version `2.0` is fully shipped, meaning that `1.0-next`
+  becomes an alias for `2.0`.
 - `catch` is now a part of Rust.
 
 To make this even more concrete, let's imagine the following (aligned with the diagram above):
 
-| Rust version | Latest available epoch | Status of `catch` in epoch 2015 | Status of `catch` in latest epoch
+| Rust version | Preview version | Status of `catch` in version 1 | Status of `catch` in latest version
 | ------------ | ---------------------- | -- | -- |
-| 1.15 | 2015 | Valid identifier | Valid identifier
-| 1.21 | 2015 | Valid identifier; deprecated | Valid identifier; deprecated
-| 1.23 | 2015-next | Valid identifier; deprecated | Keyword
-| 1.27 | 2018 | Valid identifier; deprecated | Keyword
+| 1.15 | (none) | Valid identifier | Valid identifier
+| 1.21 | (none) | Valid identifier; deprecated | Valid identifier; deprecated
+| 1.23 | 1.0-next | Valid identifier; deprecated | Keyword
+| 2.0 | (none) | Valid identifier; deprecated | Keyword
 
 Now, suppose you have the following code:
 
 ```
 Cargo.toml:
 
-epoch = "2015"
+rust_version = "1.0"
 ```
 
 ```rust
@@ -297,16 +358,17 @@ fn main() {
 }
 ```
 
-- This code will compile **as-is** on *all* Rust versions. On versions 1.21 and
-above, it will yield a warning, saying that `catch` is deprecated as an
-identifier.
+- This code will compile **as-is** on *all* Rust toolset versions, normally without extra warnings.
 
-- On version 1.23, if you change `Cargo.toml` to use epoch `2015-next`, the
-  code will fail to compile due to `catch` being a keyword. Similarly for epoch
-  `2018` on version 1.27.
+- On versions 1.21 and above, when deprecation warnings are enabled, it will yield a warning,
+  saying that `catch` is deprecated as an identifier.
 
-- However, if you leave it at epoch `2015`, you can upgrade to Rust 1.27 **and
-  use libraries that opt in to the `2018` epoch** with no problem.
+- On version 1.23, if you change `Cargo.toml` to use the preview `1.0-next`, the
+  code will fail to compile due to `catch` being a keyword. Similarly for `2.0` after
+  the 2.0 release.
+
+- However, if you leave it at version `1.0`, you can upgrade to the Rust 2.0 toolset **and
+  use libraries that opt in to the `2.0` major release** with no problem.
 
 #### Example: repurposing corner cases
 
@@ -316,10 +378,11 @@ deduce the module hierarchy from the filesystem. But there is a corner case
 today of providing both a `lib.rs` and a `bin.rs` directly at the top level,
 which doesn't play well with the new feature.
 
-Using epochs, we can deprecate such usage (in favor of the `bin` directory),
-then make it an error on the preview epoch. The module system change could then
-be made available (and ultimately stabilized) within the preview epoch, before
-shipping on the next epoch.
+**[minor change: terminology]**
+A new major version could deprecate such usage (in favor of the `bin` directory),
+then make it an error on the preview version. The module system change could then
+be made available (and ultimately stabilized) within the preview version, before
+shipping on the next major release.
 
 #### Example: repurposing syntax
 
@@ -332,12 +395,13 @@ sometimes [discussed](https://github.com/rust-lang/rfcs/pull/1603):
   foo() -> Iterator<Item = u32>` instead of `fn foo -> impl Iterator<Item =
   u32>`
 
+**[minor change: terminology]**
 Suppose we wanted to carry out such a change. We could do it over multiple steps:
 
 - First, introduce and stabilize `dyn Trait`.
 - Deprecate bare `Trait` syntax in favor of `dyn Trait`.
-- In a preview epoch, make it an error to use bare `Trait` syntax.
-- Ship the new epoch, and wait until bare `Trait` syntax is obscure.
+- In a preview release, make it an error to use bare `Trait` syntax.
+- Ship the new major release, and wait until bare `Trait` syntax is obscure.
 - Re-introduce bare `Trait` syntax, stabilize it, and deprecate `impl Trait` in
   favor of it.
 
@@ -355,14 +419,17 @@ There are a number of details about type inference that seem suboptimal:
   may cause other programs to stop compiling.
 - In trait selection, where-clauses take precedence over impls; changing this is backwards-incompatible.
 
-We may or may not be able to change these details on the existing epoch. With
+**[minor change: terminology]**
+We may or may not be able to change these details without a new major version. With
 enough effort, we could probably deprecate cases where type inference rules
 might change and request explicit type annotations, and then—in the new
-epoch—tweak those rules.
+major version—those rules.
 
-### What epochs can't do
+### What major versions can't do
 
-There are also changes that epochs don't help with, due to the constraints we
+**[minor change: terminology]**
+
+There are also changes that new major versions don't help with, due to the constraints we
 impose. These limitations are extremely important for keeping the compiler
 maintainable, the language understandable, and the ecosystem compatible.
 
@@ -373,17 +440,19 @@ which crates can provide which `impl`s. It's not possible to change protocol
 incompatibly, because existing code will assume the current protocol and provide
 impls accordingly, and there's no way to work around that fact via deprecation.
 
-More generally, this means that epochs can only be used to make changes to the
+**[minor change: terminology]**
+More generally, this means that major versions can only be used to make changes to the
 language that are applicable *crate-locally*; they cannot impose new
 requirements or semantics on external crates, since we want to retain
 compatibility with the existing ecosystem.
 
 #### Example: `Error` trait downcasting
 
+**[minor change: terminology]**
 See [rust-lang/rust#35943](https://github.com/mozilla/rust/issues/35943). Due to
 a silly oversight, you can’t currently downcast the “cause” of an error to
 introspect what it is. We can’t make the trait have stricter requirements; it
-would break existing impls. And there's no way to do so only in a newer epoch,
+would break existing impls. And there's no way to do so only in a newer major version,
 because we must be compatible with the older one, meaning that we cannot rely on
 downcasting.
 
@@ -391,39 +460,45 @@ This is essentially another example of a non-crate-local change.
 
 ## The full mechanics
 
+**[minor change: terminology]**
 We'll wrap up with the full details of the mechanisms at play.
 
-- `rustc` will take a new flag, `--epoch`, which can specify the epoch to
-  use. This flag will default to epoch 2015.
+- `rustc` will take a new flag, `--rust-version`, which can specify the major version to
+  use. This flag will default to 1.0.
   - This flag should not affect the behavior of the core trait system or passes at the MIR level.
-- `Cargo.toml` can include an `epoch` value, which is used to pass to `rustc`.
-  - If left off, it will assume epoch 2015.
-- `cargo new` will produce a `Cargo.toml` with the latest `epoch` value,
-  including preview epochs when applicable.
+- `Cargo.toml` can include an `rust_version` value, which is used to pass to `rustc`.
+  - If left off, it will assume version 1.0.
+- `cargo new` will produce a `Cargo.toml` with the latest major version, and minor 0.
+  Preview versions will not be used by default since these are not stable.
+  **[change: preview is not auto-selected]**
 
 # How We Teach This
 [how-we-teach-this]: #how-we-teach-this
 
+**[change of message]**
+
 First and foremost, if we accept this RFC, we should publicize the plan widely,
 including on the main Rust blog, in a style simlar to [previous posts] about our
 release policy. This will require extremely careful messaging, to make clear
-that epochs are *not* about breaking Rust code, but instead about providing
-compatibility indefinitely while allowing for more forms of evolution than
-today.
+that previous major versions will remain available with full support, including
+linking crates using different major versions, thus not risking division of the Rust
+ecosystem.
 
 In addition, the book should talk about the basics from a user perspective,
 including:
 
 - The fact that, if you do nothing, your code should continue to compile (with
   minimum hassle) when upgrading the compiler.
-- If you resolve deprecations as they occur, moving to a new epoch should also
-  require minimum hassle.
-- Best practices about upgrading epochs (TBD).
+- If you resolve deprecations as they occur, moving to a new major version
+  should also require minimum hassle.
+- Best practices about upgrading major versions (TBD).
 
 [previous posts]: https://blog.rust-lang.org/2014/10/30/Stability.html
 
 # Drawbacks
 [drawbacks]: #drawbacks
+
+**[minor change: terminology]**
 
 There are several drawbacks to this proposal:
 
@@ -432,35 +507,33 @@ There are several drawbacks to this proposal:
 
   - To mitigate this, we need to put front and center that, **if you do nothing,
   updating to a new `rustc` should not be a hassle**, and **staying on an old
-  epoch doesn't cut you off from the ecosystem**.
+  major version doesn't cut you off from the ecosystem**.
 
 - It adds a degree of complication to an evolution story that is already
   somewhat complex (with release channels and rapid releases).
 
-  - On the other hand, epoch releases can provide greater clarity about major
-    steps in Rust evolution, for those who are not following development
+  - On the other hand, major version releases can provide greater clarity about major
+    steps in Rust evolution, for those who are not following development 
     closely.
 
-- New epochs can invalidate existing blog posts and documentation, a problem we
+- New major versions can invalidate existing blog posts and documentation, a problem we
   suffered a lot around the 1.0 release
 
   - However, this situation already obtains in the sense of changing idioms; a
     blog post using `try!` these days already feels like it's using "old
     Rust". Notably, though, the code still compiles on current Rust.
 
-  - A saving grace is that, with epochs, it's much more likely that a post will
-    mention what epoch is being used, for context. Moreover, with sufficient
+  - A saving grace is that, with major versions, it's much more likely that a post will
+    mention which version is being used, for context. Moreover, with sufficient
     work on error messages, it seems plausible to detect that code was intended
-    for an earlier epoch and explain the situation.
-
-These downsides are most problematic in cases that involve "breakage" if they
-were done without opt in. They indicate that, even if we do adopt epochs, we
-should use them judiciously.
+    for an earlier major version and explain the situation.
 
 # Alternatives
 [alternatives]: #alternatives
 
 ## Within the basic epoch structure
+
+**[unchanged]**
 
 Sticking with the basic idea of epochs, there are a couple alternative setups,
 that avoid "preview" epochs.
@@ -495,7 +568,7 @@ that avoid "preview" epochs.
     usage of "ready to go" feature on the stable channel until the epoch is
     shipped.
 
-## Alternatives to epochs
+## Alternatives
 
 The larger alternatives include, of course, not trying to solve the problems
 laid out in the motivation, and instead finding creative alternatives.
@@ -503,31 +576,35 @@ laid out in the motivation, and instead finding creative alternatives.
 - For cases like `catch` that require a new keyword, it's not clear how to do
 this without ending up with suboptimal syntax.
 
-The other main alternative is to issue major releases in the semver sense: Rust
-2.0. This strategy could potentially be coupled with a `rustfix`, depending on
-what kinds of changes we want to allow. Downsides:
+**[changed below]**
 
-- Lack of clarity around ecosystem compatibility. If we allow both 1.0 and 2.0
-  crates to interoperate, we arrive at something like this RFC. If we don't, we
-  risk splitting the ecosystem, which is extremely dangerous.
+Different terminology is possible, as in [the epochs RFC], however beyond terminology
+the two approaches are largely the same, save that *epochs* provide an alternative
+way to differentiate *language* and *toolchain* versions, but don't allow
+*minor language versions* or clarify how/if new features are made available to
+old epochs.
 
-- Likely significant blowback based on abandoning stability as a core principle
-  of Rust. Even if we provide a perfect `rustfix`, the message is significantly muddied.
+It would of course be possible to allow greater changes in new language versions, including
+breaking compatibility between crates using different versions, however this goes
+against the promise of [stability without stagnation].
 
-- Much greater temptation to make sweeping changes, and continuous litigation
-  over what those changes should be.
+`rustc` could default to the latest major language version instead of the first (stable)
+version, however this breaks backwards compatibility in the strict sense.
 
 # Unresolved questions
 [unresolved]: #unresolved-questions
 
+**[minor changes; default version moved above]**
+
 - It's not clear what the story should be for the books and other
-  documentation. Should we gate shipping a new epoch on having a fully updated
-  book? The preview epoch---and the fact that everything is shipped on stable
-  prior to releasing the epoch---would make that plausible.
+  documentation. Should we gate shipping a new major release on having a fully updated
+  book? The preview version---and the fact that everything is shipped on stable
+  prior to releasing the version---would make that plausible.
 
-- Do we want to require a `rustfix` for all epoch changes?
+- Do we want to require a `rustfix` for all deprecations enforced by new major versions?
 
-- Will we ever consider dropping support for very old epochs? Given the
+- Will we ever consider dropping support for very old major version series? Given the
   constraints in this RFC, it seems unlikely to ever be worth it.
 
-- Should `rustc` default to the latest epoch instead?
+# Notes
+
