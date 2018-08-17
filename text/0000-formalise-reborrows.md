@@ -1,6 +1,6 @@
 - Feature Name: Formalise Reborrows
 - Start Date: 2018-03-19
-- RFC PR: (leave this empty)
+- RFC PR: https://github.com/rust-lang/rfcs/pull/2364
 - Rust Issue: (leave this empty)
 
 # Summary
