@@ -122,14 +122,15 @@ on this function.
 
 ## WASM
 
-WebAssembly is tricky to support properly, since there is no support for random
-numbers within the base standard itself. Nevertheless, it is often possible to
-retrieve random numbers via a JavaScript API provided by the web browser or by
-Node.js. This brings up a second problem: interaction with JavaScript requires
-an external dependency (with `wasm-bindgen` and `stdweb` being the current
-offerings).
+WebAssembly targets web browsers, and these provide a JavaScript API to retrieve
+secure random data (`crypto.getRandomValues`); alternatively, it may be possible
+to use Node.js (`crypto.randomFillSync`). Since these are JavaScript functions,
+some method of bridging Rust and JS is required; currently the Rand project
+supports both `wasm-bindgen` and `stdweb`.
 
-I am not sufficiently knowledgable to make a recommendation here: **help please**.
+I am not sufficiently knowledgable to make a recommendation for what `std`
+should do here; e.g. it could use `wasm-bindgen` or simply not implement
+`secure_random` on WASM. **Help please**.
 
 # Drawbacks
 [drawbacks]: #drawbacks
