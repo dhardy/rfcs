@@ -11,16 +11,25 @@ Add `std::random::secure_random` and custom error type.
 # Motivation
 [motivation]: #motivation
 
+This RFC was proposed in [Rand #648]. Provision of a secure source
+of random numbers may be seen as a core Operating System service:
+
+-   this is OS-specific, yet all major OSes and many emulation/sandbox
+    environments have at least one randomness source
+-   almost all `std` platforms have some form of randomness source provided by
+    the OS, while most other platforms do not have standard solutions (although
+    they may have device-specific ones)
+-   providing random data is simple relative to all the things that can be done
+    with it
+
 Currently both the Rand's [`OsRng`] and `libstd`'s `hashmap_random_keys`
 function (an internal detail used to implement [`RandomState`]) implement an
 interface to random data provided by the current platform's interface. This is
-a complex interface that must be duplicated.
+a complex interface that must be duplicated since the `hashmap_random_keys`
+function is not exposed from `std` (and not sufficently generic).
 
-Additionally, some users believe this interface should be exposed by the `std`
-lib: see [Rand #648].
-
-Finally, this could be leveraged to provide uniform `no_std` support via usage
-of [`lang_items`].
+Additionally, this could be leveraged to provide uniform `no_std` support via
+usage of [`lang_items`].
 
 # Guide-level explanation
 [guide-level-explanation]: #guide-level-explanation
@@ -36,33 +45,15 @@ platform's secure random interface:
 /// there is no strong source of random data available. On failure no guarantees
 /// are made regarding the contents of `buf`.
 /// 
+/// It is possible (though unlikely) that the implementation will block.
+/// 
 /// Note that the implementation may short-circuit on a zero-length buffer, so
 /// to test initialisation you must request at least one byte.
 pub fn secure_random(buf: &mut [u8]) -> Result<(), Error>
 ```
 
-To enable this, we use a custom `Error` type, whose design is constrained to
-enable `no_std` support. This may be a copy of the [`rand_core::Error`] type.
-Specifically, this type supports at least the following functionality (either
-via methods or via fields as in the `rand_core` error type):
-
-```rust
-impl Error {
-    /// Get a descriptive message of the error
-    fn msg(&self) -> &'static str;
-
-    /// Get a status code
-    fn kind(&self) -> ErrorKind;
-}
-
-enum ErrorKind {
-    /// The randomness source is not currently available (or does not have
-    /// sufficient entropy to be secure), but is likely to be later
-    NotReady,
-    /// There is no functional secure randomness source
-    Unavailable
-}
-```
+This module is also available as `core::random`, though `no_std` builds require
+the user or a third-party crate to provide the backend.
 
 # Reference-level explanation
 [reference-level-explanation]: #reference-level-explanation
@@ -95,15 +86,62 @@ size supported by each system interface.
 We propose to unify these into a single `std::random::secure_random` function,
 then implement [`RandomState`] and [`OsRng`] as wrappers around this.
 
-## Error handling
+## Blocking?
 
-The error handling type itself is sketched out above, but details may need
-fleshing out.
+It is possible the random source may block (although we prefer `/dev/urandom`
+over `/dev/random`). For example, this may happen if the RNG is not yet
+initialised (which Rand's current implementation for Linux explicitly checks).
 
-The only (current) user of `secure_random` within `libstd` is [`RandomState`].
+We have a choice here: in *some* cases where the source would block, we could
+detect this and fail with a `WouldBlock` error code, although we cannot
+guarantee the implementation will never block. Alternatively we could always
+block. We could make this behaviour configurable.
+
+Optionally, we could add a function like the following, which 
+partially replaces the need for a non-blocking API:
+
+```rust
+/// Attempt to check, without blocking, whether the system random source is
+/// ready for usage.
+/// 
+/// If this returns `Some(true)`, then calls to `secure_random` are likely to
+/// succeed without blocking. If it returns `Some(false)`, they are likely to
+/// block.
+/// 
+/// In case it is not possible to determine the status without blocking, this
+/// function returns `None`.
+fn is_ready() -> Option<bool>
+```
+
+## Error type
+
+To enable this, we use a custom `Error` type, whose design is constrained to
+enable `no_std` support. Since `core::random::Error` must be functional without
+an allocator, we cannot use `std::io::Error` (which may use a `Box`). Since
+`std::random::Error` must be the same type, we cannot copy the design of
+`rand_core::Error`. We thus must pick a simple design, like the following:
+
+```rust
+pub enum ErrorKind {
+    NotReady,   // optional status (see blocking section)
+    Unavailable,
+}
+
+pub struct Error {
+    pub msg: &'static str,  // cannot be a String or have 'a parameter as in &'a str
+    pub kind: ErrorKind,
+}
+```
+
+## Handling errors within `std`
+
+The only (current) need for randomness within `libstd` is [`RandomState`].
 Since a source of secure entropy is not critical except to avoid DoS attacks on
-certain public services, we think it acceptable that `RandomState` ignore
-errors from `secure_random`. This allows use of `HashMap` on all platforms.
+certain public services, we think it acceptable that `RandomState` use a
+constant value should `secure_random` return an error. This allows use of
+`HashMap` on all platforms.
+
+Should this also use a constant if `secure_random` would block?
 
 ## `no_std` support
 
@@ -145,16 +183,24 @@ proposed here, which may make supporting some platforms harder (e.g. while
 Rand's [`OsRng`] does have support for WASM, it has been a frequent source
 of issues) — although the API does allow for explicit failure.
 
+# Unresolved questions
+
+See the blocking section above and note under error handling.
+
 # Rationale and alternatives
 [rationale-and-alternatives]: #rationale-and-alternatives
 
 We could choose between multiple names for the interface, depending on what
-we choose to emphasise: `secure_random`, `system_random`.
+we choose to emphasise: `secure_random`, `system_random`, `os_random`.
+Personally I prefer `system_random` except for the possible association with
+C#'s insecure generator.
 
-We could alternatively provide an `Rng` trait and implement that, however this
-is likely best left to an external crate. The [`RngCore`] trait arrived at in
-Rand is complex in order to provide an optimal interface to multiple different
-users.
+We could use a struct instead of a plain function to objectify the
+configuration. This allows the simple `SystemRandom::new().fill_buf(&mut buf)`
+vs `SystemRandom::nonblocking().fill_buf(&mut buf)`. However, this appears
+needlessly complex, although it does have some precedent in `std`:
+`File::open(path)` vs `OpenOptions::new().read(true).open(path)`. This may also
+require a different backend for `no_std` implementation via `lang_items`.
 
 Optionally we could add a function like `random::is_ready() -> bool` to test
 whether the system RNG is available and has been initialized. There is little
@@ -162,16 +208,37 @@ motivation though since the user can simply try reading a byte.
 
 There is scope for supporting an *insecure* randomness source (via a separate
 function, a parameter, or even an error code indicating that the buffer has been
-filled with insecure random data), however I am not aware of many insecure
-sources (though the list might include a clock-based-RNG and RDRAND, depending
-on point of view).
+filled with insecure random data).
+
+We could alternatively provide an `Rng` trait and implement that, however this
+is likely best left to an external crate. The [`RngCore`] trait arrived at in
+Rand is complex in order to provide an optimal interface to multiple different
+users.
+
+Alternatively, we could not do this; the Rand crate is already widely used and
+the new `rand_os` crate allows use of (almost) only a system-random wrapper.
+This does not solve the duplicate implementation issue or solve the problem of
+a user-provided alternative with `no_std` configurations (though the latter has
+other solutions).
 
 # Prior art
 [prior-art]: #prior-art
 
 This RFC is motivated by [Rand #648] and [Rand #643].
 
-TODO: compare with other languages/libraries? **help**
+We can compare with other languages, though this has limited utility:
+
+-   C advocates use of `srand(time(0))` for insecure seeding but has no
+    equivalent to this proposal
+-   C++ has `std::random_device` as a non-deterministic random number generator,
+    where the specification allows implementation by a local PRNG, and
+    implementations may or may not be secure (or may even be deterministic in
+    buggy cases)
+-   Python has a `os.urandom(size)` which wraps the OS randomness source (in
+    blocking mode only) and is intended for cryptographic usage
+-   Modern browsers support the JS API `crypto.getRandomValues(array);`
+-   Java has more APIs than anyone could want
+-   C# has `System.Random` which is *not* secure and `RNGCryptoServiceProvider`
 
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
